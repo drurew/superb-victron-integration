@@ -1,4 +1,4 @@
-# Victron BMS CANopen Integration
+# Super-b victron | CANopen Integration
 
 ✅ **PRODUCTION READY** - Fully tested and deployed on Victron Cerbo GX
 
