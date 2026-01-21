@@ -49,11 +49,11 @@ All SDO conversions have been verified against live hardware:
 
 ### Method 1: SetupHelper (Package Manager) - Recommended
 1.  **Online Install**: Add the repository URL to SetupHelper and install from the menu.
-2.  **Offline/USB Install**:
-    *   Download the verified release package (`superb-victron-integration-vX.X.X.tar.gz`) from GitHub Releases.
-    *   *Alternatively*, create it yourself: Run `./create_package.sh` in the source folder.
+2.  **Offline/USB Install (Windows/Mac/Linux)**:
+    *   Download the verified release package (`superb-victron-integration-vX.X.X.tar.gz`) from the **[GitHub Releases](https://github.com/drurew/superb-victron-integration/releases)** page (or the "Actions" tab for latest builds).
     *   Copy the `.tar.gz` file to a USB stick.
     *   Insert into Cerbo GX and install via SetupHelper's "Install from USB/Storage" option.
+    *   *(Advanced Users)*: You can also build it yourself using `./create_package.sh` on Linux/Mac.
 
 ### Method 2: Manual/Script Install
 ```bash
