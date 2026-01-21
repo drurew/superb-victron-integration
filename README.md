@@ -1,6 +1,6 @@
 # Super-b victron | CANopen Integration
 
-✅ **PRODUCTION READY** - Fully tested and deployed on Victron Cerbo GX
+**PRODUCTION READY** - Fully tested and deployed on Victron Cerbo GX
 
 Complete plug-and-play integration for SuperB Epsilon V2 BMS with Victron Cerbo GX via CANopen.
 
@@ -14,14 +14,14 @@ This service allows SuperB Epsilon V2 battery management systems to appear as na
 
 ## Features
 
-- ✅ **Native Victron Integration**: Appears as standard battery monitor in Venus OS
-- ✅ **Multi-Battery Support**: Monitor multiple batteries individually
-- ✅ **Real-time Monitoring**: 1-second update interval for live data
-- ✅ **Comprehensive Data**: Voltage, current, SOC, temperature, charge cycles
-- ✅ **Automatic Startup**: Auto-starts on Cerbo boot via `/data/rc.local`
-- ✅ **Robust Operation**: Survives SSH disconnect, handles errors gracefully
-- ✅ **Verified SDO Objects**: All conversions tested on live hardware
-- ⚠️ **Individual Mode Only**: Aggregate mode (combining batteries) not yet implemented
+- **Native Victron Integration**: Appears as standard battery monitor in Venus OS
+- **Multi-Battery Support**: Monitor multiple batteries individually
+- **Real-time Monitoring**: 1-second update interval for live data
+- **Comprehensive Data**: Voltage, current, SOC, temperature, charge cycles
+- **Automatic Startup**: Auto-starts on Cerbo boot via `/data/rc.local`
+- **Robust Operation**: Survives SSH disconnect, handles errors gracefully
+- **Verified SDO Objects**: All conversions tested on live hardware
+- **Individual Mode Only**: Aggregate mode (combining batteries) not yet implemented
 
 ## Hardware Requirements
 
@@ -36,12 +36,12 @@ All SDO conversions have been verified against live hardware:
 
 | Parameter | SDO Index | Conversion | Unit | Status |
 |-----------|-----------|------------|------|--------|
-| Battery Voltage | 0x6060:00 | ÷1024 | V | ✓ Verified |
-| State of Charge | 0x6081:00 | None | % | ✓ Verified |
-| Temperature | 0x6010:00 | ÷8 | °C | ✓ Verified |
-| Current | 0x2010:00 | ÷1000 | A | ✓ Verified (signed, mA) |
-| Charge Cycles | 0x6050:00 | None | - | ✓ Verified |
-| Ah Since Equalization | 0x6053:00 | ÷8 | Ah | ✓ Verified |
+| Battery Voltage | 0x6060:00 | ÷1024 | V |  Verified |
+| State of Charge | 0x6081:00 | None | % |  Verified |
+| Temperature | 0x6010:00 | ÷8 | °C |  Verified |
+| Current | 0x2010:00 | ÷1000 | A |  Verified (signed, mA) |
+| Charge Cycles | 0x6050:00 | None | - |  Verified |
+| Ah Since Equalization | 0x6053:00 | ÷8 | Ah |  Verified |
 
 **Note**: Current uses manufacturer-specific object 0x2010:00 (not 0x6070 which is unsigned charge-only).
 
@@ -171,7 +171,7 @@ Edit `/data/bms/config.ini`:
 
 ```ini
 [CAN]
-interface = vecan0        # ✅ CRITICAL: Must be vecan0 on Cerbo (not can0!)
+interface = vecan0        #  CRITICAL: Must be vecan0 on Cerbo (not can0!)
 bitrate = 250000          # Standard for SuperB BMS
 node_ids = 1,2,3         # Comma-separated list of BMS node IDs
 
