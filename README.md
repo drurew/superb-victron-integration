@@ -47,7 +47,25 @@ All SDO conversions have been verified against live hardware:
 
 ## Installation
 
-### Quick Install on Cerbo GX
+### Method 1: SetupHelper (Package Manager) - Recommended
+1. Install [Kwimdrem's SetupHelper (Package Manager)](https://github.com/kwindrem/SetupHelper).
+2. Download `superb-victron-integration-<version>.tar.gz` (if available) or add the repository URL if supported.
+3. Install via the Package Manager menu.
+
+### Method 2: Manual/Script Install
+```bash
+# 1. Download/Clone this repository
+wget https://github.com/drurew/superb-victron-integration/archive/refs/heads/main.zip
+unzip main.zip
+mv superb-victron-integration-main /data/superb-victron-integration
+
+# 2. Run setup
+cd /data/superb-victron-integration
+chmod +x setup
+./setup install
+```
+
+### Method 3: Legacy Remote Install (from PC)
 
 **Prerequisites:**
 - Cerbo GX with SSH access enabled
