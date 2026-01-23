@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "git_pull_superb",
+			"type": "shell",
+			"command": "git",
+			"args": [
+				"pull"
+			],
+			"isBackground": false,
+			"group": "none"
+		}
+	]
+}
