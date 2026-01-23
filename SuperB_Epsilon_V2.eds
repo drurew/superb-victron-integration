@@ -1,0 +1,977 @@
+[DeviceInfo]
+VendorName=SuperB Technologies
+VendorNumber=0x0000037C
+ProductName=Epsilon V2 Battery Management System
+ProductNumber=0x0000000A
+RevisionNumber=0x00010600
+OrderCode=
+BaudRate_10=1
+BaudRate_20=1
+BaudRate_50=1
+BaudRate_125=1
+BaudRate_250=1
+BaudRate_500=1
+BaudRate_800=1
+BaudRate_1000=1
+SimpleBootUpMaster=0
+SimpleBootUpSlave=1
+Granularity=8
+DynamicChannelsSupported=0
+CompactPDO=0
+GroupMessaging=0
+Features=0
+Description=SuperB Epsilon V2 Lithium-Ion Battery BMS with CANopenNode stack
+CreationTime=04:20PM
+CreationDate=12-22-2025
+CreatedBy=Comprehensive CAN Bus Protocol Analysis
+ModificationTime=04:20PM
+ModificationDate=12-22-2025
+ModifiedBy=Battery Testing and Protocol Discovery
+FileName=SuperB_Epsilon_V2.eds
+FileVersion=2
+FileRevision=0
+EDSVersion=4.0
+
+[DummyUsage]
+Dummy0001=0
+Dummy0002=0
+Dummy0003=0
+Dummy0004=0
+Dummy0005=1
+Dummy0006=1
+Dummy0007=1
+
+[Comments]
+Lines=15
+Line1=SuperB Epsilon V2 Battery Management System
+Line2=CANopen EDS File - Complete Protocol Documentation
+Line3=
+Line4=Based on:
+Line5=- Firmware v1.6.0 (STM32L452, CANopenNode stack)
+Line6=- Extensive CAN bus testing and protocol analysis
+Line7=- CANopen Block Download bootloader protocol
+Line8=- Hardware validation on Epsilon V2 battery modules
+Line9=
+Line10=CAN Bitrate: 250 kbps (standard)
+Line11=Node ID: 1-127 (configurable, default varies by module)
+Line12=
+Line13=Bootloader Protocol: CANopen Block Download (0x1F50)
+Line14=- Block size: 127 segments × 7 bytes = 889 bytes/block
+Line15=- Commands: 0xC2 (initiate), 0xA2 (ACK), 0xC1 (end)
+
+[MandatoryObjects]
+SupportedObjects=3
+1=0x1000
+2=0x1001
+3=0x1018
+
+[1000]
+ParameterName=Device Type
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00000000
+PDOMapping=0
+
+[1001]
+ParameterName=Error Register
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[1008]
+ParameterName=Manufacturer Device Name
+ObjectType=0x7
+DataType=0x0009
+AccessType=ro
+DefaultValue=Epsilon V2
+PDOMapping=0
+
+[1009]
+ParameterName=Manufacturer Hardware Version
+ObjectType=0x7
+DataType=0x0009
+AccessType=ro
+PDOMapping=0
+
+[100A]
+ParameterName=Manufacturer Software Version
+ObjectType=0x7
+DataType=0x0009
+AccessType=ro
+PDOMapping=0
+
+[1014]
+ParameterName=COB-ID EMCY
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x80
+PDOMapping=0
+
+[1017]
+ParameterName=Producer Heartbeat Time
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=1000
+PDOMapping=0
+
+[1018]
+ParameterName=Identity Object
+ObjectType=0x9
+SubNumber=5
+
+[1018sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=4
+PDOMapping=0
+LowLimit=0x01
+HighLimit=0x04
+
+[1018sub1]
+ParameterName=Vendor ID
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x0000037C
+PDOMapping=0
+CompactSubObj=1
+
+[1018sub2]
+ParameterName=Product Code
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x0000000A
+PDOMapping=0
+CompactSubObj=2
+
+[1018sub3]
+ParameterName=Revision Number
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00010600
+PDOMapping=0
+CompactSubObj=3
+
+[1018sub4]
+ParameterName=Serial Number
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+CompactSubObj=4
+
+[1200]
+ParameterName=SDO Server Parameter
+ObjectType=0x9
+SubNumber=3
+
+[1200sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1200sub1]
+ParameterName=COB-ID Client to Server (rx)
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=$NODEID+0x600
+PDOMapping=0
+
+[1200sub2]
+ParameterName=COB-ID Server to Client (tx)
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=$NODEID+0x580
+PDOMapping=0
+
+[1400]
+ParameterName=RPDO1 Communication Parameter
+ObjectType=0x9
+SubNumber=3
+
+[1400sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1400sub1]
+ParameterName=COB-ID
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x200
+PDOMapping=0
+
+[1400sub2]
+ParameterName=Transmission Type
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1600]
+ParameterName=RPDO1 Mapping Parameter
+ObjectType=0x9
+SubNumber=1
+
+[1600sub0]
+ParameterName=Number of Mapped Objects
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1800]
+ParameterName=TPDO1 Communication Parameter
+ObjectType=0x9
+SubNumber=6
+
+[1800sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=5
+PDOMapping=0
+
+[1800sub1]
+ParameterName=COB-ID
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=$NODEID+0x180
+PDOMapping=0
+
+[1800sub2]
+ParameterName=Transmission Type
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+
+[1800sub3]
+ParameterName=Inhibit Time
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1800sub5]
+ParameterName=Event Timer
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1A00]
+ParameterName=TPDO1 Mapping Parameter
+ObjectType=0x9
+SubNumber=1
+
+[1A00sub0]
+ParameterName=Number of Mapped Objects
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1F50]
+ParameterName=Program Control (Bootloader)
+ObjectType=0x8
+SubNumber=4
+CompactSubObj=3
+
+[1F50sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=3
+PDOMapping=0
+
+[1F50sub1]
+ParameterName=Program Data (Block Download)
+ObjectType=0x7
+DataType=0x000F
+AccessType=wo
+PDOMapping=0
+
+[1F50sub2]
+ParameterName=Program Control
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+PDOMapping=0
+
+[1F50sub3]
+ParameterName=Program Software Identification
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[2004]
+ParameterName=Error Status Register
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+PDOMapping=1
+
+[2005]
+ParameterName=Warning Status Register
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+PDOMapping=1
+
+[2006]
+ParameterName=Operational State
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+PDOMapping=1
+
+[2010]
+ParameterName=Battery Current
+ObjectType=0x7
+DataType=0x0004
+AccessType=ro
+PDOMapping=1
+ObjFlags=0
+CompactSubObj=0
+
+[2011]
+ParameterName=Cell Voltages Array
+ObjectType=0x8
+DataType=0x0003
+AccessType=ro
+CompactSubObj=17
+
+[2011sub0]
+ParameterName=Number of Cells
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=16
+PDOMapping=0
+LowLimit=1
+HighLimit=16
+
+[2011sub1]
+ParameterName=Cell 1 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub2]
+ParameterName=Cell 2 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub3]
+ParameterName=Cell 3 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub4]
+ParameterName=Cell 4 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub5]
+ParameterName=Cell 5 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub6]
+ParameterName=Cell 6 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub7]
+ParameterName=Cell 7 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub8]
+ParameterName=Cell 8 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub9]
+ParameterName=Cell 9 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub10]
+ParameterName=Cell 10 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub11]
+ParameterName=Cell 11 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub12]
+ParameterName=Cell 12 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub13]
+ParameterName=Cell 13 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub14]
+ParameterName=Cell 14 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub15]
+ParameterName=Cell 15 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2011sub16]
+ParameterName=Cell 16 Voltage
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012]
+ParameterName=Cell Temperatures Array
+ObjectType=0x8
+DataType=0x0003
+AccessType=ro
+CompactSubObj=17
+
+[2012sub0]
+ParameterName=Number of Temperature Sensors
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=16
+PDOMapping=0
+LowLimit=1
+HighLimit=16
+
+[2012sub1]
+ParameterName=Cell 1 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub2]
+ParameterName=Cell 2 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub3]
+ParameterName=Cell 3 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub4]
+ParameterName=Cell 4 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub5]
+ParameterName=Cell 5 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub6]
+ParameterName=Cell 6 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub7]
+ParameterName=Cell 7 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub8]
+ParameterName=Cell 8 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub9]
+ParameterName=Cell 9 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub10]
+ParameterName=Cell 10 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub11]
+ParameterName=Cell 11 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub12]
+ParameterName=Cell 12 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub13]
+ParameterName=Cell 13 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub14]
+ParameterName=Cell 14 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub15]
+ParameterName=Cell 15 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2012sub16]
+ParameterName=Cell 16 Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2013sub1]
+ParameterName=BMS Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2013sub2]
+ParameterName=FETs Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2013sub3]
+ParameterName=Balancers Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2014]
+ParameterName=Cycle Count
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2015sub1]
+ParameterName=Terminal Negative Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2015sub2]
+ParameterName=Terminal Positive Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2016]
+ParameterName=Pack Power
+ObjectType=0x7
+DataType=0x0004
+AccessType=ro
+PDOMapping=1
+
+[2020]
+ParameterName=State of Charge
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+PDOMapping=1
+
+[2021]
+ParameterName=State of Health
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+PDOMapping=1
+
+[2022sub1]
+ParameterName=Minimum Cell Voltage
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+PDOMapping=1
+
+[2022sub2]
+ParameterName=Maximum Cell Voltage
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+PDOMapping=1
+
+[2023sub1]
+ParameterName=Minimum Cell Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2023sub2]
+ParameterName=Maximum Cell Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[2060]
+ParameterName=Pack Voltage (High Resolution)
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=1
+
+[2FFDsub1]
+ParameterName=Switch Command
+ObjectType=0x7
+DataType=0x0005
+AccessType=wo
+PDOMapping=0
+
+[5063]
+ParameterName=Cell Balancing Time Array
+ObjectType=0x8
+DataType=0x0007
+AccessType=ro
+CompactSubObj=17
+
+[5063sub0]
+ParameterName=Number of Cells
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=16
+PDOMapping=0
+LowLimit=1
+HighLimit=16
+
+[5063sub1]
+ParameterName=Cell 1 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub2]
+ParameterName=Cell 2 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub3]
+ParameterName=Cell 3 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub4]
+ParameterName=Cell 4 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub5]
+ParameterName=Cell 5 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub6]
+ParameterName=Cell 6 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub7]
+ParameterName=Cell 7 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub8]
+ParameterName=Cell 8 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub9]
+ParameterName=Cell 9 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub10]
+ParameterName=Cell 10 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub11]
+ParameterName=Cell 11 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub12]
+ParameterName=Cell 12 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub13]
+ParameterName=Cell 13 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub14]
+ParameterName=Cell 14 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub15]
+ParameterName=Cell 15 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5063sub16]
+ParameterName=Cell 16 Balancing Time
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+PDOMapping=0
+
+[5FFF]
+ParameterName=Bootloader Control
+ObjectType=0x7
+DataType=0x0007
+AccessType=wo
+PDOMapping=0
+
+[2017sub1]
+ParameterName=Battery Pack Voltage
+ObjectType=0x7
+DataType=0x0004
+AccessType=ro
+PDOMapping=1
+
+[2017sub2]
+ParameterName=Battery Terminal Voltage
+ObjectType=0x7
+DataType=0x0004
+AccessType=ro
+PDOMapping=1
+
+[6010]
+ParameterName=BMS Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+ObjFlags=0
+
+[6020]
+ParameterName=Highest Cell Temperature
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[6050]
+ParameterName=Charge Cycles
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+PDOMapping=1
+
+[6051]
+ParameterName=Ah Expended
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[6052]
+ParameterName=Ah Returned
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+PDOMapping=1
+
+[6053]
+ParameterName=Ah Since Equalization
+ObjectType=0x7
+DataType=0x0004
+AccessType=ro
+PDOMapping=1
+
+[6060]
+ParameterName=Battery Voltage
+ObjectType=0x7
+DataType=0x0004
+AccessType=ro
+PDOMapping=1
+ObjFlags=0
+
+[6081]
+ParameterName=State of Charge (SOC)
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+PDOMapping=1
+ObjFlags=0
+
+[ManufacturerObjects]
+SupportedObjects=27
+1=0x2004
+2=0x2005
+3=0x2006
+4=0x2010
+5=0x2011
+6=0x2012
+7=0x2013
+8=0x2014
+9=0x2015
+10=0x2016
+11=0x2017
+12=0x2020
+13=0x2021
+14=0x2022
+15=0x2023
+16=0x2060
+17=0x5063
+18=0x6010
+19=0x6020
+20=0x6050
+21=0x6051
+22=0x6052
+23=0x6053
+24=0x6060
+25=0x6081
+26=0x2FFD
+27=0x5FFF
+
+[OptionalObjects]
+SupportedObjects=8
+1=0x1008
+2=0x1009
+3=0x100A
+4=0x1014
+5=0x1017
+6=0x1200
+7=0x1400
+8=0x1800
