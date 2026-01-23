@@ -372,7 +372,7 @@ def main():
     """Main entry point"""
     import argparse
     parser = argparse.ArgumentParser(description='Victron Multi-Battery BMS Monitor')
-    parser.add_argument('--interface', default='can0', help='CAN interface name')
+    parser.add_argument('--interface', default='vecan0', help='CAN interface name (usually vecan0 on Cerbo GX)')
     parser.add_argument('--bitrate', type=int, default=250000, help='CAN bitrate')
     parser.add_argument('--log-file', default='/var/log/victron-bms.log', help='Log file path')
     parser.add_argument('config', nargs='?', default='/etc/victron-bms/config.ini', help='Config file path')
