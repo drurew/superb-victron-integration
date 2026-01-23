@@ -4,6 +4,10 @@
 
 Complete plug-and-play integration for SuperB Epsilon V2 BMS with Victron Cerbo GX via CANopen.
 
+> 📘 **Protocol Documentation**
+>
+> For the complete CANopen Object Dictionary, COB-IDs, and Error Codes, see the [DATASHEET.md](DATASHEET.md).
+
 ## Overview
 
 This service allows SuperB Epsilon V2 battery management systems to appear as native battery monitors in the Victron Venus OS ecosystem. It reads battery data via CANopen (CAN bus) and publishes it to the Victron D-Bus interface.
@@ -11,6 +15,14 @@ This service allows SuperB Epsilon V2 battery management systems to appear as na
 **Status:** Deployed and working on live system (December 2025)  
 **Batteries:** Supports multiple batteries (tested with 3× 150Ah)  
 **Update Rate:** 1 second (real-time monitoring)
+
+## Firmware Compatibility & Safety
+
+This integration is fully compatible with **Epsilon Firmware v1.2.5** (Recommended).
+
+**⚠️ Warning regarding Firmware v1.3.5:**
+Users have reported "bricking" issues after updating to v1.3.5 due to a Critical Vector Table Mismatch.
+If your battery is unresponsive after an update, use the **[Epsilon Firmware Recovery Tool](../epsilon-firmware-updater)** to restore it to a working state.
 
 ## Features
 
