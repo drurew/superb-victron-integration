@@ -1,0 +1,54 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf
+
+      - name: Build C driver (ARM)
+        run: |
+          arm-linux-gnueabihf-gcc -Os -s -std=c99 -Wall -lm \
+            -o victron-bms src/victron-bms.c
+          file victron-bms
+          ls -la victron-bms
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Create package
+        run: |
+          PACKAGE_NAME="superb-victron-integration"
+          VERSION="$(cat VERSION)"
+          OUTPUT_FILE="$PACKAGE_NAME-v$VERSION.tar.gz"
+          tar --exclude=.git --exclude=.gitignore \
+              --exclude=scripts/create_package.sh \
+              --exclude='*.tar.gz' \
+              -czf "$OUTPUT_FILE" .
+          echo "Created $OUTPUT_FILE"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: victron-package
+          path: "*.tar.gz"
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: "*.tar.gz"

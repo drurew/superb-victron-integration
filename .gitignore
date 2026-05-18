@@ -2,4 +2,4 @@ __pycache__/
 *.pyc
 *.log
 *.tar.gz
-__pycache__/
+victron-bms
