@@ -104,6 +104,33 @@ Object indices verified against the SuperB Be In Charge CANOpen.dll (v1.7.0).
 See [docs/INSTALL.md](docs/INSTALL.md) for detailed installation instructions
 including automatic startup via daemontools.
 
+## Repository Structure
+
+```
+.
+├── README.md
+├── CHANGELOG.md
+├── VERSION
+├── LICENSE
+├── Makefile
+├── config.ini
+├── .github/workflows/build.yml
+├── src/
+│   ├── victron-bms.c              # C driver (production)
+│   ├── victron_bms_multi.py       # Python driver (reference)
+│   ├── bms_canopen_client.py      # CAN PDO listener
+│   └── bms_firmware_updater.py    # Firmware update tool
+├── docs/
+│   ├── INSTALL.md                 # Installation guide
+│   ├── DATASHEET.md               # CAN protocol reference
+│   └── SuperB_Epsilon_V2.eds      # CANopen EDS file
+└── scripts/
+    ├── install-to-cerbo.sh        # One-command deployment
+    ├── install.sh                 # Venus OS package installer
+    ├── start_bms.sh               # Service launcher
+    └── create_package.sh          # Tarball packaging
+```
+
 ## Drivers
 
 - **`src/victron-bms.c`** — Production C driver. Links against libc only.
