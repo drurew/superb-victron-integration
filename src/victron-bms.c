@@ -2,10 +2,12 @@
  * victron-bms.c — Compiled BMS driver for SuperB Epsilon V2 → Victron Cerbo GX
  *
  * Zero dependencies beyond libc. Uses raw SocketCAN and raw D-Bus wire protocol.
- * Compile: arm-linux-gnu-gcc -Os -s -o victron-bms victron-bms.c
+ * Compile: arm-linux-gnueabihf-gcc -Os -s -std=c99 -D_GNU_SOURCE -lm -o victron-bms victron-bms.c
  * Deploy:  scp victron-bms root@cerbo:/data/bms/
  * Run:     /data/bms/victron-bms vecan0
  */
+
+#define _GNU_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>

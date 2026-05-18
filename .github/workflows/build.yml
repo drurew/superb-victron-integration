@@ -20,11 +20,11 @@ jobs:
       - name: Install ARM cross-compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf
+          sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
 
       - name: Build C driver (ARM)
         run: |
-          arm-linux-gnueabihf-gcc -Os -s -std=c99 -Wall -lm \
+          arm-linux-gnueabihf-gcc -Os -s -std=c99 -Wall -D_GNU_SOURCE -lm \
             -o victron-bms src/victron-bms.c
           file victron-bms
           ls -la victron-bms
