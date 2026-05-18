@@ -34,13 +34,12 @@ jobs:
 
       - name: Create package
         run: |
-          PACKAGE_NAME="superb-victron-integration"
           VERSION="$(cat VERSION)"
-          OUTPUT_FILE="$PACKAGE_NAME-v$VERSION.tar.gz"
-          tar --exclude=.git --exclude=.gitignore \
-              --exclude=scripts/create_package.sh \
-              --exclude='*.tar.gz' \
-              -czf "$OUTPUT_FILE" .
+          OUTPUT_FILE="superb-victron-integration-v$VERSION.tar.gz"
+          tar --exclude=.git --exclude=.gitignore --exclude='*.tar.gz' \
+              -czf "/tmp/$OUTPUT_FILE" .
+          mv "/tmp/$OUTPUT_FILE" .
+          echo "Created $OUTPUT_FILE"
           echo "Created $OUTPUT_FILE"
 
       - name: Upload artifact
