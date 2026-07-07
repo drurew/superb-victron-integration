@@ -1,13 +1,17 @@
 /*
- * victron-bms.c — Compiled BMS driver for SuperB Epsilon V2 → Victron Cerbo GX
+ * victron-bms.c - SuperB Epsilon V2 BMS Driver for Victron Venus OS
  *
- * Zero dependencies beyond libc. Uses raw SocketCAN and raw D-Bus wire protocol.
- * Compile: arm-linux-gnueabihf-gcc -Os -s -std=c99 -D_GNU_SOURCE -lm -o victron-bms victron-bms.c
- * Deploy:  scp victron-bms root@cerbo:/data/bms/
- * Run:     /data/bms/victron-bms vecan0
+ * Publishes battery data directly to D-Bus via libdbus-1, implementing
+ * the com.victronenergy.BusItem interface.  Queries batteries via
+ * CANopen/SDO at 250 kbps.  Registers up to 3 battery services.
+ *
+ * Build:  gcc -Os -std=c99 -Wall -Wextra -D_GNU_SOURCE \
+ *             -I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include \
+ *             -o victron-bms victron-bms.c -lm -ldbus-1
+ * Run:    ./victron-bms vecan0
+ *
+ * License: MIT
  */
-
-#define _GNU_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,14 +22,11 @@
 #include <time.h>
 #include <math.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <net/if.h>
-#include <fcntl.h>
 #include <poll.h>
-
-/* ─── SocketCAN definitions (from <linux/can.h> + <linux/can/raw.h>) ─── */
+#include <dbus/dbus.h>
 
 #ifndef AF_CAN
 #define AF_CAN 29
@@ -36,574 +37,310 @@
 #ifndef CAN_RAW
 #define CAN_RAW 1
 #endif
+#ifndef SOCK_RAW
+#define SOCK_RAW 3
+#endif
 
 typedef unsigned int canid_t;
+struct can_frame { canid_t id; unsigned char dlc,__pad; unsigned short __res0; unsigned char data[8] __attribute__((aligned(8))); };
 
-struct can_frame {
-    canid_t can_id;
-    unsigned char can_dlc;
-    unsigned char __pad;
-    unsigned short __res0;
-    unsigned char data[8] __attribute__((aligned(8)));
-};
+#define SERVICE "com.victronenergy.battery.superb_bms"
+#define DEV_INST 280
+#define VERSION "3.0.0"
+#define CAPACITY 150.0
+#define CELLS 16
+#define TIMEOUT 5
+#define MAX_NODES 3
+#define FAST_MS 2000
+#define SLOW_CYC 10
 
-/* ─── D-Bus wire protocol constants ──────────────────────────────────── */
+typedef struct { unsigned short idx,sub; char dt; double div; } sdo_t;
+typedef struct { int node,online; double v,i,soc,temp,cvl,ccl,dcl,cap,cons; int cycles,err; double cell_v_min,cell_v_max,cell[CELLS]; int c_ok[CELLS]; time_t last; } bat_t;
 
-#define DBUS_SYSTEM_BUS_PATH "/var/run/dbus/system_bus_socket"
-#define DBUS_MESSAGE_TYPE_METHOD_CALL  1
-#define DBUS_MESSAGE_TYPE_METHOD_RETURN 2
-#define DBUS_MESSAGE_TYPE_SIGNAL       4
-#define DBUS_HEADER_FLAG_NO_REPLY_EXPECTED 0x01
-#define DBUS_HEADER_FLAG_NO_AUTO_START      0x02
+/* SuperB Epsilon V2 CANopen SDO map */
+static const sdo_t sf[] = {
+    {0x6060,0,'i',1024.0},{0x2010,0,'i',1000.0},{0x6081,0,'B',1.0},
+    {0x5021,1,'i',1000.0},{0x5021,2,'i',1000.0},{0x2060,0,'I',1024.0}};
+static const sdo_t ss[] = {
+    {0x2013,1,'h',10.0},{0x2014,0,'h',1.0},{0x2020,0,'H',1.0},{0x2004,0,'H',1.0}};
+#define NF (sizeof(sf)/sizeof(sf[0]))
+#define NS (sizeof(ss)/sizeof(ss[0]))
 
-/* ─── SDO parameter definitions ──────────────────────────────────────── */
+static bat_t B[MAX_NODES];
+static volatile int run=1;
+static DBusConnection *conn;
 
-typedef struct {
-    unsigned short index;
-    unsigned char  subindex;
-    char           dtype;   /* 'i'=int32, 'I'=uint32, 'h'=int16, 'H'=uint16, 'B'=uint8 */
-    double         divisor;
-} sdo_param;
-
-static const sdo_param sdo_params[] = {
-    /* name                   index   sub  dtype  divisor */
-    [0]  /* voltage        */ {0x6060, 0x00, 'i', 1024.0},
-    [1]  /* current        */ {0x2010, 0x00, 'i', 1000.0},
-    [2]  /* soc            */ {0x6081, 0x00, 'B', 1.0},
-    [3]  /* temperature    */ {0x2013, 0x01, 'h', 10.0},
-    [4]  /* max_discharge  */ {0x5021, 0x01, 'i', 1000.0},
-    [5]  /* max_charge     */ {0x5021, 0x02, 'i', 1000.0},
-    [6]  /* max_chg_voltage*/ {0x2060, 0x00, 'I', 1024.0},
-    [7]  /* cycles         */ {0x2014, 0x00, 'h', 1.0},
-    [8]  /* capacity_ah    */ {0x2020, 0x00, 'H', 1.0},
-    [9]  /* error_reg      */ {0x2004, 0x00, 'H', 1.0},
-};
-#define N_FAST_PARAMS    7   /* 0-6 */
-#define N_SLOW_PARAMS    3   /* 7-9 */
-#define N_SDO_PARAMS    10
-
-/* ─── Global state ────────────────────────────────────────────────────── */
-
-static int can_fd = -1;
-static int dbus_fd = -1;
-static int dbus_serial = 0;
-static volatile sig_atomic_t running = 1;
-
-/* Per-battery cached values */
-typedef struct {
-    int    node_id;
-    double voltage, current, soc, temperature;
-    double max_charge_a, max_discharge_a, max_charge_v;
-    double capacity_ah;
-    int    cycles;
-    int    online;
-} battery_state;
-
-static battery_state batteries[3] = {
-    {.node_id = 1, .online = 0},
-    {.node_id = 2, .online = 0},
-    {.node_id = 3, .online = 0},
-};
-
-/* ─── CAN helpers ──────────────────────────────────────────────────────── */
-
-static int can_open(const char *ifname) {
-    int fd = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-    if (fd < 0) {
-        perror("socket(CAN)");
-        return -1;
-    }
-
-    struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) {
-        perror("ioctl(SIOCGIFINDEX)");
-        close(fd);
-        return -1;
-    }
-
-    struct sockaddr_can {
-        unsigned short family;
-        unsigned short pad;
-        int            ifindex;
-    } addr = {.family = AF_CAN, .ifindex = ifr.ifr_ifindex};
-
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("bind(CAN)");
-        close(fd);
-        return -1;
-    }
+static int can_open(const char *n){
+    int fd=socket(PF_CAN,SOCK_RAW,CAN_RAW); if(fd<0){perror("socket");return -1;}
+    struct ifreq r; memset(&r,0,sizeof(r)); strncpy(r.ifr_name,n,IFNAMSIZ-1);
+    if(ioctl(fd,SIOCGIFINDEX,&r)<0){perror("ioctl");close(fd);return -1;}
+    struct{unsigned short f,p;int i;}a={AF_CAN,0,r.ifr_ifindex};
+    if(bind(fd,(struct sockaddr*)&a,sizeof(a))<0){perror("bind");close(fd);return -1;}
     return fd;
 }
-
-static int can_send(int fd, unsigned int id, const unsigned char *data, int len) {
-    struct can_frame frame = {.can_id = id, .can_dlc = len};
-    memcpy(frame.data, data, len);
-    return write(fd, &frame, sizeof(frame));
+static int can_send(int fd,unsigned id,const unsigned char*d,int l){
+    struct can_frame f={.id=id,.dlc=l}; memcpy(f.data,d,l);
+    return write(fd,&f,sizeof(f));
+}
+static int can_recv(int fd,struct can_frame*f,int ms){
+    struct pollfd p={.fd=fd,.events=POLLIN};
+    if(poll(&p,1,ms)<=0){dbus_connection_read_write_dispatch(conn,0);return 0;}
+    return read(fd,f,sizeof(*f))==sizeof(*f)?1:0;
+}
+static int sdo_read(int fd,int node,unsigned short idx,unsigned char sub,int*o,int ms){
+    int tx=0x600+node,rx=0x580+node;
+    unsigned char req[8]={0x40,idx&0xFF,idx>>8,sub,0,0,0,0};
+    if(can_send(fd,tx,req,8)<0)return -1;
+    struct timeval s; gettimeofday(&s,NULL);
+    int d=ms;
+    while(d>0){struct can_frame r;int ret=can_recv(fd,&r,d);
+        if(ret<=0)return -1;
+        struct timeval n; gettimeofday(&n,NULL);
+        d=ms-((n.tv_sec-s.tv_sec)*1000+(n.tv_usec-s.tv_usec)/1000);
+        if(r.id!=(unsigned)rx)continue;
+        if(r.data[0]==0x80)return -2;
+        if(r.data[0]==0x43||r.data[0]==0x47||r.data[0]==0x4B||r.data[0]==0x4F||r.data[0]==0x41)
+        {*o=(int)(r.data[4]|(r.data[5]<<8)|(r.data[6]<<16)|(r.data[7]<<24));return 0;}
+    }return -1;
+}
+static double sdo_val(int fd,int node,const sdo_t*p,int*ab){
+    if(*ab)return NAN;
+    int raw,r=sdo_read(fd,node,p->idx,p->sub,&raw,150);
+    if(r==-2){*ab=1;return NAN;}if(r<0)return NAN;
+    switch(p->dt){
+    case'i':return(int)raw/p->div;case'I':return(unsigned)raw/p->div;
+    case'h':return(short)(raw&0xFFFF)/p->div;case'H':return(unsigned short)(raw&0xFFFF)/p->div;
+    case'B':return(unsigned char)(raw&0xFF)/p->div;}return NAN;
 }
 
-static int can_recv(int fd, struct can_frame *frame, int timeout_ms) {
-    struct pollfd pfd = {.fd = fd, .events = POLLIN};
-    int ret = poll(&pfd, 1, timeout_ms);
-    if (ret <= 0) return ret;
-    return read(fd, frame, sizeof(*frame));
+/* D-Bus: append {path: {Value:variant, Text:string}} dict entry */
+static void ae(DBusMessageIter*A,const char*p,int vt,const void*v,const char*t){
+    DBusMessageIter e,d,de,sv;
+    dbus_message_iter_open_container(A,DBUS_TYPE_DICT_ENTRY,NULL,&e);
+    dbus_message_iter_append_basic(&e,DBUS_TYPE_STRING,&p);
+    dbus_message_iter_open_container(&e,DBUS_TYPE_ARRAY,"{sv}",&d);
+    dbus_message_iter_open_container(&d,DBUS_TYPE_DICT_ENTRY,NULL,&de);
+    const char*k="Value";dbus_message_iter_append_basic(&de,DBUS_TYPE_STRING,&k);
+    const char*sig=vt==DBUS_TYPE_DOUBLE?"d":vt==DBUS_TYPE_INT32?"i":"s";
+    dbus_message_iter_open_container(&de,DBUS_TYPE_VARIANT,sig,&sv);
+    if(vt==DBUS_TYPE_STRING){const char*sp=(const char*)v;dbus_message_iter_append_basic(&sv,vt,&sp);}
+    else dbus_message_iter_append_basic(&sv,vt,v);
+    dbus_message_iter_close_container(&de,&sv);dbus_message_iter_close_container(&d,&de);
+    dbus_message_iter_open_container(&d,DBUS_TYPE_DICT_ENTRY,NULL,&de);
+    const char*n="Text";dbus_message_iter_append_basic(&de,DBUS_TYPE_STRING,&n);
+    dbus_message_iter_open_container(&de,DBUS_TYPE_VARIANT,"s",&sv);
+    dbus_message_iter_append_basic(&sv,DBUS_TYPE_STRING,&t);
+    dbus_message_iter_close_container(&de,&sv);dbus_message_iter_close_container(&d,&de);
+    dbus_message_iter_close_container(&e,&d);dbus_message_iter_close_container(A,&e);
 }
 
-/* ─── SDO read ─────────────────────────────────────────────────────────── */
-
-static int sdo_read(int fd, int node_id, unsigned short index,
-                    unsigned char subindex, int *raw_out, int timeout_ms) {
-    int sdo_tx = 0x600 + node_id;
-    int sdo_rx = 0x580 + node_id;
-
-    unsigned char req[8] = {
-        0x40, index & 0xFF, (index >> 8) & 0xFF,
-        subindex, 0, 0, 0, 0
-    };
-    if (can_send(fd, sdo_tx, req, 8) < 0) return -1;
-
-    int deadline_ms = timeout_ms;
-    struct timeval start, now;
-    gettimeofday(&start, NULL);
-
-    while (deadline_ms > 0) {
-        struct can_frame resp;
-        int ret = can_recv(fd, &resp, deadline_ms);
-        if (ret <= 0) return -1;
-
-        gettimeofday(&now, NULL);
-        deadline_ms = timeout_ms - ((now.tv_sec - start.tv_sec) * 1000 +
-                                     (now.tv_usec - start.tv_usec) / 1000);
-
-        if (resp.can_id != (unsigned int)sdo_rx) continue;
-
-        unsigned char cmd = resp.data[0];
-        if (cmd == 0x80) return -2; /* abort */
-        if (cmd == 0x43 || cmd == 0x47 || cmd == 0x4B || cmd == 0x4F || cmd == 0x41) {
-            *raw_out = (int)(resp.data[4] | (resp.data[5] << 8) |
-                            (resp.data[6] << 16) | (resp.data[7] << 24));
-            return 0;
-        }
+static void a_all(DBusMessageIter*A,bat_t*b){
+    char buf[64]; double d; int iv; const char*s;
+    #define E(p,t,vv,tt) ae(A,p,t,vv,tt)
+    /* Measurements */
+    d=b->soc; snprintf(buf,sizeof(buf),"%.0f%%",d); E("/Soc",DBUS_TYPE_DOUBLE,&d,buf);
+    d=b->v; snprintf(buf,sizeof(buf),"%.2fV",d); E("/Dc/0/Voltage",DBUS_TYPE_DOUBLE,&d,buf);
+    d=b->i; snprintf(buf,sizeof(buf),"%.1fA",d); E("/Dc/0/Current",DBUS_TYPE_DOUBLE,&d,buf);
+    d=b->v*b->i; snprintf(buf,sizeof(buf),"%.0fW",d); E("/Dc/0/Power",DBUS_TYPE_DOUBLE,&d,buf);
+    d=b->temp; snprintf(buf,sizeof(buf),"%.1f°C",d); E("/Dc/0/Temperature",DBUS_TYPE_DOUBLE,&d,buf);
+    /* DVCC limits */
+    d=b->ccl; snprintf(buf,sizeof(buf),"%.1fA",d); E("/Info/MaxChargeCurrent",DBUS_TYPE_DOUBLE,&d,buf);
+    d=b->dcl; snprintf(buf,sizeof(buf),"%.1fA",d); E("/Info/MaxDischargeCurrent",DBUS_TYPE_DOUBLE,&d,buf);
+    d=b->cvl; snprintf(buf,sizeof(buf),"%.2fV",d); E("/Info/MaxChargeVoltage",DBUS_TYPE_DOUBLE,&d,buf);
+    /* Cell stats */
+    d=b->cell_v_min; snprintf(buf,sizeof(buf),"%.3fV",d); E("/System/MinCellVoltage",DBUS_TYPE_DOUBLE,&d,buf);
+    d=b->cell_v_max; snprintf(buf,sizeof(buf),"%.3fV",d); E("/System/MaxCellVoltage",DBUS_TYPE_DOUBLE,&d,buf);
+    /* System */
+    iv=CELLS; snprintf(buf,sizeof(buf),"%d",iv); E("/System/NrOfCellsPerBattery",DBUS_TYPE_INT32,&iv,buf);
+    iv=b->online?1:0; snprintf(buf,sizeof(buf),"%d",iv); E("/System/NrOfModulesOnline",DBUS_TYPE_INT32,&iv,buf);
+    iv=b->online?0:1; snprintf(buf,sizeof(buf),"%d",iv); E("/System/NrOfModulesOffline",DBUS_TYPE_INT32,&iv,buf);
+    iv=0; snprintf(buf,sizeof(buf),"%d",iv); E("/System/NrOfModulesBlockingCharge",DBUS_TYPE_INT32,&iv,buf);
+    iv=0; snprintf(buf,sizeof(buf),"%d",iv); E("/System/NrOfModulesBlockingDischarge",DBUS_TYPE_INT32,&iv,buf);
+    /* Connection */
+    iv=b->online; snprintf(buf,sizeof(buf),"%d",iv); E("/Connected",DBUS_TYPE_INT32,&iv,buf);
+    iv=b->online; snprintf(buf,sizeof(buf),"%d",iv); E("/Io/AllowToCharge",DBUS_TYPE_INT32,&iv,buf);
+    iv=b->online; snprintf(buf,sizeof(buf),"%d",iv); E("/Io/AllowToDischarge",DBUS_TYPE_INT32,&iv,buf);
+    iv=b->online; snprintf(buf,sizeof(buf),"%d",iv); E("/Capabilities/ChargeVoltageControl",DBUS_TYPE_INT32,&iv,buf);
+    /* History */
+    d=b->cons; snprintf(buf,sizeof(buf),"%.1f",d); E("/ConsumedAmphours",DBUS_TYPE_DOUBLE,&d,buf);
+    iv=DEV_INST; snprintf(buf,sizeof(buf),"%d",iv); E("/DeviceInstance",DBUS_TYPE_INT32,&iv,buf);
+    d=b->cap; snprintf(buf,sizeof(buf),"%.0f",d); E("/InstalledCapacity",DBUS_TYPE_DOUBLE,&d,buf);
+    iv=b->cycles; snprintf(buf,sizeof(buf),"%d",iv); E("/History/ChargeCycles",DBUS_TYPE_INT32,&iv,buf);
+    /* Metadata */
+    E("/ProductName",DBUS_TYPE_STRING,"SuperB Epsilon V2","SuperB Epsilon V2");
+    E("/HardwareVersion",DBUS_TYPE_STRING,"Epsilon V2","Epsilon V2");
+    E("/FirmwareVersion",DBUS_TYPE_STRING,VERSION,VERSION);
+    E("/Mgmt/ProcessName",DBUS_TYPE_STRING,"victron-bms","victron-bms");
+    E("/Mgmt/ProcessVersion",DBUS_TYPE_STRING,VERSION,VERSION);
+    E("/Mgmt/Connection",DBUS_TYPE_STRING,"CANopen SDO","CANopen SDO");
+    /* Alarms - SuperB error register bit mapping */
+    int e=b->err;
+    iv=(e&0x0001)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/LowVoltage",DBUS_TYPE_INT32,&iv,buf);
+    iv=(e&0x0002)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/HighVoltage",DBUS_TYPE_INT32,&iv,buf);
+    iv=(e&0x0008)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/LowTemperature",DBUS_TYPE_INT32,&iv,buf);
+    iv=(e&0x0004)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/HighTemperature",DBUS_TYPE_INT32,&iv,buf);
+    iv=b->online&&b->soc<10.0?1:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/LowSoc",DBUS_TYPE_INT32,&iv,buf);
+    iv=(e&0x0020)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/HighChargeCurrent",DBUS_TYPE_INT32,&iv,buf);
+    iv=(e&0x0010)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/HighDischargeCurrent",DBUS_TYPE_INT32,&iv,buf);
+    iv=0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/CellImbalance",DBUS_TYPE_INT32,&iv,buf);
+    iv=(e&0x0040)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/InternalFailure",DBUS_TYPE_INT32,&iv,buf);
+    iv=(e&0x0004)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/HighChargeTemperature",DBUS_TYPE_INT32,&iv,buf);
+    iv=(e&0x0008)?2:0; snprintf(buf,sizeof(buf),"%d",iv); E("/Alarms/LowChargeTemperature",DBUS_TYPE_INT32,&iv,buf);
+    /* Per-cell voltages */
+    for(int n=0;n<CELLS;n++)if(b->c_ok[n]){
+        char cp[32],ct[16]; snprintf(cp,sizeof(cp),"/Voltages/Cell%d",n+1);
+        d=b->cell[n]; snprintf(ct,sizeof(ct),"%.3fV",d);
+        ae(A,cp,DBUS_TYPE_DOUBLE,&d,ct);
     }
-    return -1;
+    #undef E
 }
 
-static double sdo_read_param(int fd, int node_id, const sdo_param *p,
-                             int *aborted) {
-    if (*aborted) return NAN;
-
-    int raw;
-    int ret = sdo_read(fd, node_id, p->index, p->subindex, &raw, 150);
-    if (ret == -2) {
-        *aborted = 1;
-        return NAN;
-    }
-    if (ret < 0) return NAN;
-
-    switch (p->dtype) {
-    case 'i': return (double)(int)raw / p->divisor;
-    case 'I': return (double)(unsigned int)raw / p->divisor;
-    case 'h': return (double)(short)(raw & 0xFFFF) / p->divisor;
-    case 'H': return (double)(unsigned short)(raw & 0xFFFF) / p->divisor;
-    case 'B': return (double)(unsigned char)(raw & 0xFF) / p->divisor;
-    }
-    return NAN;
+static void emit(bat_t*b){
+    DBusMessage*s=dbus_message_new_signal("/","com.victronenergy.BusItem","ItemsChanged");
+    if(!s)return;
+    DBusMessageIter it,arr;
+    dbus_message_iter_init_append(s,&it);
+    dbus_message_iter_open_container(&it,DBUS_TYPE_ARRAY,"{sa{sv}}",&arr);
+    a_all(&arr,b);
+    dbus_message_iter_close_container(&it,&arr);
+    dbus_connection_send(conn,s,NULL);dbus_connection_flush(conn);
+    dbus_message_unref(s);
 }
 
-/* ─── D-Bus wire protocol (minimal, no libdbus) ───────────────────────── */
-
-static int dbus_connect(void) {
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) { perror("socket(unix)"); return -1; }
-
-    struct sockaddr_un addr = {.sun_family = AF_UNIX};
-    strcpy(addr.sun_path, DBUS_SYSTEM_BUS_PATH);
-
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("connect(dbus)");
-        close(fd);
-        return -1;
+static DBusHandlerResult on_msg(DBusConnection*c,DBusMessage*m,void*u){
+    fprintf(stderr,"on_msg called\n"); fflush(stderr);
+    const char*dest=dbus_message_get_destination(m);
+    bat_t*b=&B[0];
+    if(dest){for(int i=0;i<MAX_NODES;i++){char svc[128];snprintf(svc,sizeof(svc),"%s_node%d",SERVICE,i+1);if(!strcmp(dest,svc)){b=&B[i];break;}}}
+    if(dbus_message_is_method_call(m,"org.freedesktop.DBus.Introspectable","Introspect")){
+        const char*xml="<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n\"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n<node><interface name=\"com.victronenergy.BusItem\"><method name=\"GetValue\"><arg direction=\"out\" type=\"v\"/></method><method name=\"GetText\"><arg direction=\"out\" type=\"s\"/></method><method name=\"GetItems\"><arg direction=\"out\" type=\"a{sa{sv}}\"/></method><signal name=\"ItemsChanged\"><arg type=\"a{sa{sv}}\" name=\"changes\"/></signal></interface></node>\n";
+        DBusMessage*r=dbus_message_new_method_return(m);
+        dbus_message_append_args(r,DBUS_TYPE_STRING,&xml,DBUS_TYPE_INVALID);
+        dbus_connection_send(c,r,NULL);dbus_message_unref(r);
+        return DBUS_HANDLER_RESULT_HANDLED;
     }
+    const char*path=dbus_message_get_path(m),*method=dbus_message_get_member(m);
+    if(!method||strcmp(dbus_message_get_interface(m),"com.victronenergy.BusItem"))
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 
-    /* Read server greeting: "OK <uuid>\r\n" (no null) */
-    char buf[256];
-    int n = read(fd, buf, sizeof(buf) - 1);
-    if (n < 0) { close(fd); return -1; }
-    buf[n] = '\0';
-    if (strncmp(buf, "OK ", 3) != 0) {
-        fprintf(stderr, "DBus greeting unexpected: %s\n", buf);
-        close(fd); return -1;
+    if(!strcmp(method,"GetItems")){
+        DBusMessage*r=dbus_message_new_method_return(m);
+        DBusMessageIter it,arr;
+        dbus_message_iter_init_append(r,&it);
+        dbus_message_iter_open_container(&it,DBUS_TYPE_ARRAY,"{sa{sv}}",&arr);
+        a_all(&arr,b);
+        dbus_message_iter_close_container(&it,&arr);
+        dbus_connection_send(c,r,NULL);dbus_message_unref(r);
+        return DBUS_HANDLER_RESULT_HANDLED;
     }
-
-    /* Send AUTH: \0AUTH EXTERNAL <hex-uid>\r\n */
-    char auth[128];
-    int uid = getuid();
-    auth[0] = '\0';
-    int len = 1 + snprintf(auth + 1, sizeof(auth) - 1,
-                           "AUTH EXTERNAL %x\r\n", uid);
-    if (write(fd, auth, len) < 0) { close(fd); return -1; }
-
-    /* Read AUTH response: "OK <guid>\r\n" */
-    n = read(fd, buf, sizeof(buf) - 1);
-    if (n < 0 || strncmp(buf, "OK ", 3) != 0) {
-        buf[n < 0 ? 0 : n] = '\0';
-        fprintf(stderr, "DBus auth failed: %s\n", buf);
-        close(fd); return -1;
-    }
-
-    /* Send BEGIN */
-    if (write(fd, "BEGIN\r\n", 7) < 0) { close(fd); return -1; }
-    return fd;
+    /* GetValue/GetText: rebuild the list inline.  For a small fixed set this is fine. */
+    char buf[64]; double d; int iv; const char*s;
+    #define TRY(p,vt,vv,tt) if(!strcmp(path,p)){if(!strcmp(method,"GetValue")){DBusMessage*r=dbus_message_new_method_return(m);DBusMessageIter it;dbus_message_iter_init_append(r,&it);DBusMessageIter sv;const char*sig=vt==DBUS_TYPE_DOUBLE?"d":vt==DBUS_TYPE_INT32?"i":"s";dbus_message_iter_open_container(&it,DBUS_TYPE_VARIANT,sig,&sv);dbus_message_iter_append_basic(&sv,vt,vv);dbus_message_iter_close_container(&it,&sv);dbus_connection_send(c,r,NULL);dbus_message_unref(r);}else{DBusMessage*r=dbus_message_new_method_return(m);dbus_message_append_args(r,DBUS_TYPE_STRING,&tt,DBUS_TYPE_INVALID);dbus_connection_send(c,r,NULL);dbus_message_unref(r);}return DBUS_HANDLER_RESULT_HANDLED;}
+    #define TD(p,expr,fmt) d=expr;snprintf(buf,sizeof(buf),fmt,d);TRY(p,DBUS_TYPE_DOUBLE,&d,buf)
+    #define TI(p,expr) iv=expr;snprintf(buf,sizeof(buf),"%d",iv);TRY(p,DBUS_TYPE_INT32,&iv,buf)
+    #define TS(p,str) s=str;TRY(p,DBUS_TYPE_STRING,s,s)
+    TD("/Soc",b->soc,"%.0f%%");TD("/Dc/0/Voltage",b->v,"%.2fV");TD("/Dc/0/Current",b->i,"%.1fA");
+    TD("/Dc/0/Power",b->v*b->i,"%.0fW");TD("/Dc/0/Temperature",b->temp,"%.1f°C");
+    TD("/Info/MaxChargeCurrent",b->ccl,"%.1fA");TD("/Info/MaxDischargeCurrent",b->dcl,"%.1fA");
+    TD("/Info/MaxChargeVoltage",b->cvl,"%.2fV");
+    TD("/System/MinCellVoltage",b->cell_v_min,"%.3fV");TD("/System/MaxCellVoltage",b->cell_v_max,"%.3fV");
+    TI("/System/NrOfCellsPerBattery",CELLS);TI("/System/NrOfModulesOnline",b->online?1:0);
+    TI("/System/NrOfModulesOffline",b->online?0:1);
+    TI("/System/NrOfModulesBlockingCharge",0);TI("/System/NrOfModulesBlockingDischarge",0);
+    TI("/Connected",b->online);TI("/Io/AllowToCharge",b->online);TI("/Io/AllowToDischarge",b->online);
+    TI("/Capabilities/ChargeVoltageControl",b->online);
+    TD("/ConsumedAmphours",b->cons,"%.1f");TI("/DeviceInstance",DEV_INST);
+    TD("/InstalledCapacity",b->cap,"%.0f");TI("/History/ChargeCycles",b->cycles);
+    TS("/ProductName","SuperB Epsilon V2");TS("/HardwareVersion","Epsilon V2");
+    TS("/FirmwareVersion",VERSION);TS("/Mgmt/ProcessName","victron-bms");
+    TS("/Mgmt/ProcessVersion",VERSION);TS("/Mgmt/Connection","CANopen SDO");
+    int e=b->err;
+    TI("/Alarms/LowVoltage",(e&0x0001)?2:0);TI("/Alarms/HighVoltage",(e&0x0002)?2:0);
+    TI("/Alarms/LowTemperature",(e&0x0008)?2:0);TI("/Alarms/HighTemperature",(e&0x0004)?2:0);
+    TI("/Alarms/LowSoc",b->online&&b->soc<10.0?1:0);
+    TI("/Alarms/HighChargeCurrent",(e&0x0020)?2:0);TI("/Alarms/HighDischargeCurrent",(e&0x0010)?2:0);
+    TI("/Alarms/CellImbalance",0);TI("/Alarms/InternalFailure",(e&0x0040)?2:0);
+    TI("/Alarms/HighChargeTemperature",(e&0x0004)?2:0);TI("/Alarms/LowChargeTemperature",(e&0x0008)?2:0);
+    /* Per-cell voltages */
+    if(strncmp(path,"/Voltages/Cell",14)==0){int n=atoi(path+14);
+        if(n>=1&&n<=CELLS&&b->c_ok[n-1]){d=b->cell[n-1];snprintf(buf,sizeof(buf),"%.3fV",d);TRY(path,DBUS_TYPE_DOUBLE,&d,buf);}}
+    #undef TRY
+    #undef TD
+    #undef TI
+    #undef TS
+    DBusMessage*err=dbus_message_new_error(m,"com.victronenergy.BusItem.Error","Path not found");
+    dbus_connection_send(c,err,NULL);dbus_message_unref(err);
+    return DBUS_HANDLER_RESULT_HANDLED;
 }
 
-/* Build D-Bus message header (little-endian).
- * Returns total message length; writes to buf. */
-static int dbus_msg_header(unsigned char *buf, int serial,
-                           const char *dest, const char *path,
-                           const char *iface, const char *member) {
-    memset(buf, 0, 256);
-    /* Endianness flag: 'l' = little-endian */
-    buf[0] = 'l';
-    buf[1] = 0; /* message type 0 (will be set by caller) */
-    buf[2] = 0; /* flags */
-    buf[3] = 1; /* protocol version */
-
-    /* Body length = 0 (no body, just header + padding) */
-    /* We fill in the header fields after the fixed header */
-
-    /* Skip 12 bytes of fixed header; we'll fill length later */
-    int pos = 12; /* start of header fields */
-
-    /* Header fields encoded as:
-     *   struct { byte type; byte[1] sig; } header_field
-     *   value (variant)
-     *
-     * Fields:
-     *   PATH:    type=1, sig="o", value=path string
-     *   DESTINATION: type=6, sig="s", value=dest string (only for method calls)
-     *   INTERFACE: type=2, sig="s", value=iface string
-     *   MEMBER:  type=3, sig="s", value=member string
-     */
-
-    /* PATH */
-    buf[pos++] = 1; /* type PATH */
-    buf[pos++] = 1; /* variant signature: 1 byte 'o' */
-    buf[pos++] = 'o';
-    buf[pos] = 0; /* padding */
-    int path_len = strlen(path);
-    buf[pos + 1] = path_len;
-    memcpy(buf + pos + 5, path, path_len);
-    pos += 5 + path_len;
-    /* align to 8-byte boundary within header */
-    while ((pos - 12) & 7) buf[pos++] = 0;
-
-    /* DESTINATION (if present) */
-    if (dest) {
-        buf[pos++] = 6;
-        buf[pos++] = 1;
-        buf[pos++] = 's';
-        buf[pos] = 0;
-        int dlen = strlen(dest);
-        buf[pos + 1] = dlen;
-        memcpy(buf + pos + 5, dest, dlen);
-        pos += 5 + dlen;
-        while ((pos - 12) & 7) buf[pos++] = 0;
-    }
-
-    /* INTERFACE */
-    buf[pos++] = 2;
-    buf[pos++] = 1;
-    buf[pos++] = 's';
-    buf[pos] = 0;
-    int ilen = strlen(iface);
-    buf[pos + 1] = ilen;
-    memcpy(buf + pos + 5, iface, ilen);
-    pos += 5 + ilen;
-    while ((pos - 12) & 7) buf[pos++] = 0;
-
-    /* MEMBER */
-    buf[pos++] = 3;
-    buf[pos++] = 1;
-    buf[pos++] = 's';
-    buf[pos] = 0;
-    int mlen = strlen(member);
-    buf[pos + 1] = mlen;
-    memcpy(buf + pos + 5, member, mlen);
-    pos += 5 + mlen;
-    while ((pos - 12) & 7) buf[pos++] = 0;
-
-    /* Fill in header length (bytes 4-7) and body length (already 0) */
-    int header_len = pos - 12;
-    buf[4] = header_len & 0xFF;
-    buf[5] = (header_len >> 8) & 0xFF;
-    buf[6] = (header_len >> 16) & 0xFF;
-    buf[7] = (header_len >> 24) & 0xFF;
-
-    /* Serial number (bytes 8-11) */
-    buf[8] = serial & 0xFF;
-    buf[9] = (serial >> 8) & 0xFF;
-    buf[10] = (serial >> 16) & 0xFF;
-    buf[11] = (serial >> 24) & 0xFF;
-
-    /* Marshal data area (empty for method call) — add 8-byte padding */
-    int total = pos + 8;
-    buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0;
-    buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0;
-    return total;
-}
-
-/* ─── D-Bus service registration ───────────────────────────────────────── */
-
-/* Register a service name on the bus */
-static int dbus_request_name(const char *name) {
-    unsigned char buf[512];
-    int serial = ++dbus_serial;
-    int len = dbus_msg_header(buf, serial,
-                              "org.freedesktop.DBus", "/org/freedesktop/DBus",
-                              "org.freedesktop.DBus", "RequestName");
-    buf[1] = DBUS_MESSAGE_TYPE_METHOD_CALL;
-
-    /* Body: string name, uint32 flags */
-    int pos = len - 8; /* data starts after header + padding */
-    int nlen = strlen(name);
-    buf[pos++] = nlen;
-    memcpy(buf + pos, name, nlen);
-    pos += nlen;
-    buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0; /* flags=0 */
-    buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0;
-
-    /* fix body length */
-    int body_len = pos - (len - 8);
-    buf[4] = body_len & 0xFF;
-    buf[5] = (body_len >> 8) & 0xFF;
-    buf[6] = (body_len >> 16) & 0xFF;
-    buf[7] = (body_len >> 24) & 0xFF;
-
-    return write(dbus_fd, buf, pos);
-}
-
-/* Emit PropertiesChanged signal for a single property */
-static int dbus_emit_property(const char *path, const char *iface,
-                              const char *prop_name, int prop_type,
-                              const void *value_ptr) {
-    /*
-     * Signal: org.freedesktop.DBus.Properties.PropertiesChanged
-     * Body: STRING interface_name
-     *       ARRAY of DICT_ENTRY(STRING, VARIANT) changed_properties
-     *       ARRAY of STRING invalidated_properties
-     *
-     * For a single property:
-     *   array length = 1
-     *   dict entry: string key -> variant value
-     */
-
-    unsigned char buf[1024];
-    int serial = ++dbus_serial;
-    int header_pos = dbus_msg_header(buf, serial, NULL, path,
-                                     "org.freedesktop.DBus.Properties",
-                                     "PropertiesChanged");
-    buf[1] = DBUS_MESSAGE_TYPE_SIGNAL;
-
-    int pos = header_pos - 8; /* data starts here */
-
-    /* ARG1: STRING interface_name */
-    int ilen = strlen(iface);
-    buf[pos++] = ilen;
-    memcpy(buf + pos, iface, ilen);
-    pos += ilen;
-    buf[pos++] = 0; /* nul terminator */
-    while (pos & 3) buf[pos++] = 0; /* align to 4 */
-
-    /* ARG2: ARRAY of DICT_ENTRY(STRING, VARIANT) */
-    /* array length = 12 (one dict entry: 4+4+4 alignment) */
-    buf[pos++] = 12; buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0;
-    /* aligned to 8-byte boundary? already 4-aligned, may need padding */
-    while ((pos - (header_pos - 8)) & 7) buf[pos++] = 0;
-
-    /* DICT_ENTRY: STRING key */
-    int klen = strlen(prop_name);
-    buf[pos++] = klen;
-    memcpy(buf + pos, prop_name, klen);
-    pos += klen;
-    buf[pos++] = 0; /* nul */
-    while (pos & 3) buf[pos++] = 0; /* align to 4 */
-
-    /* VARIANT value: signature bytes + value */
-    /* signature is 1 byte type + nul */
-    char sig[2] = {prop_type, 0};
-    buf[pos++] = 1; /* sig length = 1 */
-    buf[pos++] = sig[0];
-    buf[pos++] = 0; /* nul */
-    buf[pos++] = 0; /* padding to 4-byte alignment */
-
-    /* value — copy based on type */
-    switch (prop_type) {
-    case 'd': { /* double */
-        double val = *(const double *)value_ptr;
-        memcpy(buf + pos, &val, 8);
-        pos += 8;
-        break;
-    }
-    case 'i': { /* int32 */
-        int val = *(const int *)value_ptr;
-        buf[pos++] = val & 0xFF;
-        buf[pos++] = (val >> 8) & 0xFF;
-        buf[pos++] = (val >> 16) & 0xFF;
-        buf[pos++] = (val >> 24) & 0xFF;
-        break;
-    }
-    }
-
-    /* ARG3: ARRAY of STRING (empty) */
-    buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0;
-
-    /* Fix body length */
-    int body_len = pos - (header_pos - 8);
-    buf[4] = body_len & 0xFF;
-    buf[5] = (body_len >> 8) & 0xFF;
-    buf[6] = (body_len >> 16) & 0xFF;
-    buf[7] = (body_len >> 24) & 0xFF;
-
-    return write(dbus_fd, buf, pos);
-}
-
-/* ─── Signal handler ───────────────────────────────────────────────────── */
-
-static void sig_handler(int sig) {
-    (void)sig;
-    running = 0;
-}
-
-/* ─── Main ─────────────────────────────────────────────────────────────── */
-
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "usage: %s <can-interface>\n", argv[0]);
-        return 1;
-    }
-
-    signal(SIGINT, sig_handler);
-    signal(SIGTERM, sig_handler);
-
-    /* Connect CAN */
-    can_fd = can_open(argv[1]);
-    if (can_fd < 0) return 1;
-    printf("victron-bms: connected to %s\n", argv[1]);
-
-    /* Connect D-Bus */
-    dbus_fd = dbus_connect();
-    if (dbus_fd < 0) {
-        fprintf(stderr, "D-Bus connect failed\n");
-        return 1;
-    }
-    printf("victron-bms: connected to D-Bus\n");
-
-    /* Register service names for each battery */
-    for (int i = 0; i < 3; i++) {
-        char name[128];
-        snprintf(name, sizeof(name),
-                 "com.victronenergy.battery.canopen_bms_node%d", i + 1);
-        dbus_request_name(name);
-        usleep(100000);
-        printf("victron-bms: registered %s\n", name);
-    }
-
-    /* Abort tracking for SDO objects */
-    int aborted[3][N_SDO_PARAMS];
-    memset(aborted, 0, sizeof(aborted));
-
-    int cycle = 0;
-    struct timespec cycle_time;
-    clock_gettime(CLOCK_MONOTONIC, &cycle_time);
-
-    printf("victron-bms: running, 2000ms interval\n");
-
-    while (running) {
-        /* Read all fast params for all batteries */
-        for (int b = 0; b < 3; b++) {
-            double val;
-            int nid = b + 1;
-
-            for (int p = 0; p < N_FAST_PARAMS; p++) {
-                val = sdo_read_param(can_fd, nid, &sdo_params[p], &aborted[b][p]);
-                if (!isfinite(val)) continue;
-
-                switch (p) {
-                case 0: /* voltage */
-                    batteries[b].voltage = val;
-                    batteries[b].online = 1;
-                    dbus_emit_property("/", "", "Connected", 'i', &(int){1});
-                    dbus_emit_property("/", "Dc/0", "Voltage", 'd', &val);
-                    break;
-                case 1: /* current */
-                    batteries[b].current = val;
-                    dbus_emit_property("/", "Dc/0", "Current", 'd', &val);
-                    { double power = batteries[b].voltage * val;
-                      dbus_emit_property("/", "Dc/0", "Power", 'd', &power); }
-                    break;
-                case 2: /* soc */
-                    batteries[b].soc = val;
-                    dbus_emit_property("/", "", "Soc", 'd', &val);
-                    { double consumed = 150.0 * (100.0 - val) / 100.0;
-                      dbus_emit_property("/", "", "ConsumedAmphours", 'd', &consumed); }
-                    break;
-                case 4: /* max_discharge_a */
-                    val = fabs(val);
-                    dbus_emit_property("/", "Info", "MaxDischargeCurrent", 'd', &val);
-                    break;
-                case 5: /* max_charge_a */
-                    val = fabs(val);
-                    batteries[b].max_charge_a = val;
-                    dbus_emit_property("/", "Info", "MaxChargeCurrent", 'd', &val);
-                    break;
-                case 6: /* max_charge_voltage */
-                    batteries[b].max_charge_v = val;
-                    dbus_emit_property("/", "Info", "MaxChargeVoltage", 'd', &val);
-                    break;
-                }
-            }
-        }
-
-        /* Slow params every 10 cycles */
-        if (cycle % 10 == 0) {
-            for (int b = 0; b < 3; b++) {
-                int nid = b + 1;
-                for (int p = N_FAST_PARAMS; p < N_SDO_PARAMS; p++) {
-                    double val = sdo_read_param(can_fd, nid, &sdo_params[p],
-                                                &aborted[b][p]);
-                    if (!isfinite(val)) continue;
-                    switch (p) {
-                    case 3: /* temperature */
-                        dbus_emit_property("/", "Dc/0", "Temperature", 'd', &val);
-                        break;
-                    case 7: /* cycles */
-                        { int c = (int)val;
-                          dbus_emit_property("/", "History", "ChargeCycles", 'i', &c); }
-                        break;
-                    case 8: /* capacity_ah */
-                        dbus_emit_property("/", "", "Capacity", 'd', &val);
-                        break;
-                    }
-                }
-            }
-        }
-
-        cycle++;
-
-        /* Sleep until next 2-second boundary */
-        cycle_time.tv_sec += 2;
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        long sleep_ms = (cycle_time.tv_sec - now.tv_sec) * 1000 +
-                        (cycle_time.tv_nsec - now.tv_nsec) / 1000000;
-        if (sleep_ms > 0 && sleep_ms <= 2000) {
-            usleep(sleep_ms * 1000);
-        }
-    }
-
-    printf("victron-bms: shutting down\n");
-    if (can_fd >= 0) close(can_fd);
-    if (dbus_fd >= 0) close(dbus_fd);
+static int dbus_reg(int node,bat_t*b){
+    char svc[128]; snprintf(svc,sizeof(svc),"%s_node%d",SERVICE,node);
+    DBusError e; dbus_error_init(&e);
+    int r=dbus_bus_request_name(conn,svc,DBUS_NAME_FLAG_DO_NOT_QUEUE,&e);
+    if(r!=DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER){fprintf(stderr,"dbus: %s taken\n",svc);return -1;}
+    printf("victron-bms: registered %s\n",svc);
     return 0;
+}
+
+static void on_signal(int sig){(void)sig;run=0;}
+
+int main(int argc,char**argv){
+    const char*ifname=NULL;
+    for(int i=1;i<argc;i++)if(argv[i][0]!='-')ifname=argv[i];
+    if(!ifname){fprintf(stderr,"Usage: %s <can-interface>\n",argv[0]);return 1;}
+    signal(SIGINT,on_signal);signal(SIGTERM,on_signal);signal(SIGPIPE,SIG_IGN);
+    setbuf(stdout,NULL);
+
+    int cfd=can_open(ifname);if(cfd<0)return 1;
+    printf("victron-bms: CAN on %s\n",ifname);
+
+    DBusError de; dbus_error_init(&de);
+    conn=dbus_bus_get(DBUS_BUS_SYSTEM,&de);
+    if(dbus_error_is_set(&de)){fprintf(stderr,"dbus: %s\n",de.message);return 1;}
+
+    /* Match rules and filter are per-connection, added once */
+    dbus_bus_add_match(conn,"type='method_call',interface='com.victronenergy.BusItem'",&de);
+    dbus_bus_add_match(conn,"type='method_call',interface='org.freedesktop.DBus.Introspectable'",&de);
+    dbus_connection_add_filter(conn,on_msg,NULL,NULL);
+
+    for(int i=0;i<MAX_NODES;i++){B[i].node=i+1;B[i].online=0;B[i].cap=CAPACITY;}
+    for(int i=0;i<MAX_NODES;i++){if(dbus_reg(i+1,&B[i])<0){close(cfd);return 1;}emit(&B[i]);}
+
+    printf("victron-bms: running, %dms interval\n",FAST_MS);
+
+    int aborted[MAX_NODES]; memset(aborted,0,sizeof(aborted));
+    int cycle=0; struct timespec next; clock_gettime(CLOCK_MONOTONIC,&next);
+
+    while(run){
+        dbus_connection_read_write_dispatch(conn,0);
+        time_t now=time(NULL);
+        for(int n=0;n<MAX_NODES;n++){double v;
+            for(int p=0;p<(int)NF;p++){v=sdo_val(cfd,n+1,&sf[p],&aborted[n]);if(!isfinite(v))continue;
+                switch(p){
+                case 0:B[n].v=v;B[n].online=1;B[n].last=now;break;
+                case 1:B[n].i=v;B[n].cons=B[n].cap*(100.0-B[n].soc)/100.0;break;
+                case 2:B[n].soc=v;break;
+                case 3:B[n].dcl=fabs(v);break;
+                case 4:B[n].ccl=fabs(v);break;
+                case 5:B[n].cvl=v;break;
+                }}}
+        if(cycle%SLOW_CYC==0)for(int n=0;n<MAX_NODES;n++){double v;
+            for(int p=0;p<(int)NS;p++){v=sdo_val(cfd,n+1,&ss[p],&aborted[n]);if(!isfinite(v))continue;
+                switch(p){
+                case 0:B[n].temp=v;break;
+                case 1:B[n].cycles=(int)v;break;
+                case 2:B[n].cap=v;break;
+                case 3:B[n].err=(int)v;break;
+                }}}
+        for(int n=0;n<MAX_NODES;n++)if(B[n].online&&now-B[n].last>TIMEOUT){B[n].online=0;printf("victron-bms: node %d timeout\n",n+1);}
+        for(int n=0;n<MAX_NODES;n++)emit(&B[n]);
+        cycle++;
+        next.tv_sec+=FAST_MS/1000; struct timespec cur; clock_gettime(CLOCK_MONOTONIC,&cur);
+        long ms=(next.tv_sec-cur.tv_sec)*1000+(next.tv_nsec-cur.tv_nsec)/1000000;
+        if(ms>0&&ms<=FAST_MS)usleep(ms*1000);
+        dbus_connection_read_write_dispatch(conn,50);
+    }
+    printf("victron-bms: shutting down\n");
+    for(int n=0;n<MAX_NODES;n++){char svc[128];snprintf(svc,sizeof(svc),"%s_node%d",SERVICE,n+1);dbus_bus_release_name(conn,svc,NULL);}
+    dbus_connection_unref(conn);close(cfd);return 0;
 }
