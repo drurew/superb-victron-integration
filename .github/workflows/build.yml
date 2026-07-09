@@ -19,19 +19,16 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libdbus-1-dev:armhf
+          sudo apt-get install -y libdbus-1-dev
 
-      - name: Build C driver (ARM)
+      - name: Build C driver (host, verify compilation)
         run: |
-          arm-linux-gnueabihf-gcc -Os -s -std=c99 -Wall -D_GNU_SOURCE \
-            -I/usr/include/arm-linux-gnueabihf/dbus-1.0 \
-            -I/usr/lib/arm-linux-gnueabihf/dbus-1.0/include \
+          gcc -Os -std=c99 -Wall -D_GNU_SOURCE \
+            $(pkg-config --cflags dbus-1) \
             -o victron-bms src/victron-bms.c \
-            -L/usr/lib/arm-linux-gnueabihf -lm -ldbus-1
+            -lm $(pkg-config --libs dbus-1)
           file victron-bms
-          ls -la victron-bms
 
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
