@@ -17,15 +17,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ARM cross-compiler
+      - name: Install build dependencies
         run: |
+          sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+          sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libdbus-1-dev:armhf
 
       - name: Build C driver (ARM)
         run: |
-          arm-linux-gnueabihf-gcc -Os -s -std=c99 -Wall -D_GNU_SOURCE -lm \
-            -o victron-bms src/victron-bms.c
+          arm-linux-gnueabihf-gcc -Os -s -std=c99 -Wall -D_GNU_SOURCE \
+            -I/usr/arm-linux-gnueabihf/include/dbus-1.0 \
+            -I/usr/lib/arm-linux-gnueabihf/dbus-1.0/include \
+            -o victron-bms src/victron-bms.c \
+            -L/usr/lib/arm-linux-gnueabihf -lm -ldbus-1
           file victron-bms
           ls -la victron-bms
 
