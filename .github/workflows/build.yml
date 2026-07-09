@@ -26,7 +26,7 @@ jobs:
       - name: Build C driver (ARM)
         run: |
           arm-linux-gnueabihf-gcc -Os -s -std=c99 -Wall -D_GNU_SOURCE \
-            -I/usr/arm-linux-gnueabihf/include/dbus-1.0 \
+            -I/usr/include/arm-linux-gnueabihf/dbus-1.0 \
             -I/usr/lib/arm-linux-gnueabihf/dbus-1.0/include \
             -o victron-bms src/victron-bms.c \
             -L/usr/lib/arm-linux-gnueabihf -lm -ldbus-1
