@@ -30,6 +30,12 @@ jobs:
             -lm $(pkg-config --libs dbus-1)
           file victron-bms
 
+      - name: Build and run unit tests
+        run: |
+          gcc -D_GNU_SOURCE -DUNIT_TEST -Os -Wall -Wextra -std=c99 \
+            -o victron-bms-test src/victron-bms.c -lm
+          ./victron-bms-test
+
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
 

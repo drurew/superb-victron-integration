@@ -26,7 +26,9 @@
 #include <sys/time.h>
 #include <net/if.h>
 #include <poll.h>
+#ifndef UNIT_TEST
 #include <dbus/dbus.h>
+#endif
 
 #ifndef AF_CAN
 #define AF_CAN 29
@@ -68,7 +70,9 @@ static const sdo_t ss[] = {
 
 static bat_t B[MAX_NODES];
 static volatile int run=1;
+#ifndef UNIT_TEST
 static DBusConnection *conn;
+#endif
 
 static int can_open(const char *n){
     int fd=socket(PF_CAN,SOCK_RAW,CAN_RAW); if(fd<0){perror("socket");return -1;}
@@ -84,7 +88,11 @@ static int can_send(int fd,unsigned id,const unsigned char*d,int l){
 }
 static int can_recv(int fd,struct can_frame*f,int ms){
     struct pollfd p={.fd=fd,.events=POLLIN};
-    if(poll(&p,1,ms)<=0){dbus_connection_read_write_dispatch(conn,0);return 0;}
+    if(poll(&p,1,ms)<=0){
+#ifndef UNIT_TEST
+        dbus_connection_read_write_dispatch(conn,0);
+#endif
+        return 0;}
     return read(fd,f,sizeof(*f))==sizeof(*f)?1:0;
 }
 
@@ -121,6 +129,8 @@ static double sdo_val(int fd,int node,const sdo_t*p,int*ab){
     case'h':return(short)(raw&0xFFFF)/p->div;case'H':return(unsigned short)(raw&0xFFFF)/p->div;
     case'B':return(unsigned char)(raw&0xFF)/p->div;}return NAN;
 }
+
+#ifndef UNIT_TEST
 
 /* D-Bus: append {path: {Value:variant, Text:string}} dict entry */
 static void ae(DBusMessageIter*A,const char*p,int vt,const void*v,const char*t){
@@ -353,3 +363,90 @@ int main(int argc,char**argv){
     for(int n=0;n<MAX_NODES;n++){char svc[128];snprintf(svc,sizeof(svc),"%s_node%d",SERVICE,n+1);dbus_bus_release_name(conn,svc,NULL);}
     dbus_connection_unref(conn);close(cfd);return 0;
 }
+
+#endif /* !UNIT_TEST */
+#ifdef UNIT_TEST
+
+/* Build:  gcc -D_GNU_SOURCE -DUNIT_TEST -Os -Wall -Wextra -std=c99 \
+ *              -o victron-bms-test src/victron-bms.c
+ * No libdbus-1 required. Tests the CANopen SDO response parser and
+ * Super-B PDO broadcast parser against known values. */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+static int fail = 0;
+#define CHECK(c, msg) do { \
+    if (!(c)) { printf("FAIL: %s\n", msg); fail++; } \
+    else      { printf("ok:   %s\n", msg); } } while (0)
+static int feq(double a, double b) { return fabs(a - b) < 1e-6; }
+
+/* Stub the helpers we need */
+#define s8p(d,o)  ((signed char)(d)[(o)])
+#define u16p(d,o) ((unsigned short)((d)[(o)]|((d)[(o)+1]<<8)))
+
+/* Minimal battery state for test */
+static bat_t B[3];
+
+int main(void) {
+    memset(B, 0, sizeof(B));
+
+    /* ── PDO 0x67: cell voltages ── */
+    /* Tray 1: max 3.522V, min 3.518V */
+    unsigned char c67[8] = {0x01,0x00,0xC2,0x0D,0xBE,0x0D,0,0};
+    pdo_recv(c67, 0x67);
+    CHECK(feq(B[0].cell_v_max, 3.522), "PDO 0x67 tray 1 max cell 3.522V");
+    CHECK(feq(B[0].cell_v_min, 3.518), "PDO 0x67 tray 1 min cell 3.518V");
+
+    /* Tray 2: max 3.510V, min 3.505V */
+    unsigned char c67b[8] = {0x02,0x00,0xB6,0x0D,0xB1,0x0D,0,0};
+    pdo_recv(c67b, 0x67);
+    CHECK(feq(B[1].cell_v_max, 3.510), "PDO 0x67 tray 2 max cell 3.510V");
+    CHECK(feq(B[1].cell_v_min, 3.505), "PDO 0x67 tray 2 min cell 3.505V");
+
+    /* ── PDO 0x68: temperatures ── */
+    /* Tray 1: max 29C, min 27C */
+    unsigned char c68[8] = {0x01,0x00,0,0,0,0x1D,0x1B,0};
+    pdo_recv(c68, 0x68);
+    CHECK(feq(B[0].cell_v_max, 29.0), "PDO 0x68 tray 1 max temp 29C");
+    CHECK(feq(B[0].cell_v_min, 27.0), "PDO 0x68 tray 1 min temp 27C");
+
+    /* Tray 3: max 31C, min 30C */
+    unsigned char c68b[8] = {0x03,0x00,0,0,0,0x1F,0x1E,0};
+    pdo_recv(c68b, 0x68);
+    CHECK(feq(B[2].cell_v_max, 31.0), "PDO 0x68 tray 3 max temp 31C");
+    CHECK(feq(B[2].cell_v_min, 30.0), "PDO 0x68 tray 3 min temp 30C");
+
+    /* ── Tray ID out of range ── */
+    unsigned char cbad[8] = {0x05,0x00,0xC0,0x0D,0xBE,0x0D,0,0};
+    double old = B[0].cell_v_max;
+    pdo_recv(cbad, 0x67);
+    CHECK(feq(B[0].cell_v_max, old), "PDO 0x67 tray 5 ignored (out of range)");
+
+    /* ── SDO response parser ── */
+    int raw;
+    /* Voltage SDO: 0x6060/0, divisor 1024, i32 */
+    { unsigned char r[8] = {0x43,0x60,0x60,0x00,0x80,0x34,0x00,0x00};
+      raw = (int)(r[4]|(r[5]<<8)|(r[6]<<16)|(r[7]<<24));
+      double v = (double)(int)raw / 1024.0;
+      CHECK(feq(v, 13.125), "SDO voltage 0x3480 / 1024 = 13.125V"); }
+
+    /* Current SDO: 0x2010/0, divisor 1000, i32 (negative) */
+    { unsigned char r[8] = {0x43,0x10,0x20,0x00,0xED,0xFF,0xFF,0xFF};
+      raw = (int)(r[4]|(r[5]<<8)|(r[6]<<16)|(r[7]<<24));
+      double i = (double)(int)raw / 1000.0;
+      CHECK(feq(i, -0.019), "SDO current -19 / 1000 = -0.019A"); }
+
+    /* SOC SDO: 0x6081/0, divisor 1, u8 */
+    { unsigned char r[8] = {0x4F,0x81,0x60,0x00,0x27,0,0,0};
+      raw = (int)(r[4]|(r[5]<<8)|(r[6]<<16)|(r[7]<<24));
+      double soc = (double)(unsigned char)(raw & 0xFF) / 1.0;
+      CHECK(feq(soc, 39.0), "SDO SOC 0x27 = 39%%"); }
+
+    printf(fail ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", fail);
+    return fail ? 1 : 0;
+}
+
+#endif /* UNIT_TEST */
