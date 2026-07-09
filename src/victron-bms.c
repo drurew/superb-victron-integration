@@ -87,6 +87,14 @@ static int can_recv(int fd,struct can_frame*f,int ms){
     if(poll(&p,1,ms)<=0){dbus_connection_read_write_dispatch(conn,0);return 0;}
     return read(fd,f,sizeof(*f))==sizeof(*f)?1:0;
 }
+
+/* Super-B PDO broadcasts (verified via firmware RE, project_ultimate) */
+#define PDO_CELLS 0x67  /* MaxCellVoltage U16*0.001V, MinCellVoltage U16*0.001V */
+#define PDO_TEMPS 0x68  /* MaxCellTemp S8 degC, MinCellTemp S8 degC */
+#define u16p(d,o) ((unsigned short)((d)[(o)]|((d)[(o)+1]<<8)))
+#define s8p(d,o)  ((signed char)(d)[(o)])
+static void pdo_recv(const unsigned char*d,int id){int n=(d[0]&0xFF)-1;if(n<0||n>=MAX_NODES)return;if(id==PDO_CELLS){B[n].cell_v_max=u16p(d,2)*0.001;B[n].cell_v_min=u16p(d,4)*0.001;}else if(id==PDO_TEMPS){B[n].cell_v_max=(double)s8p(d,5);B[n].cell_v_min=(double)s8p(d,6);}}
+
 static int sdo_read(int fd,int node,unsigned short idx,unsigned char sub,int*o,int ms){
     int tx=0x600+node,rx=0x580+node;
     unsigned char req[8]={0x40,idx&0xFF,idx>>8,sub,0,0,0,0};
@@ -97,6 +105,7 @@ static int sdo_read(int fd,int node,unsigned short idx,unsigned char sub,int*o,i
         if(ret<=0)return -1;
         struct timeval n; gettimeofday(&n,NULL);
         d=ms-((n.tv_sec-s.tv_sec)*1000+(n.tv_usec-s.tv_usec)/1000);
+        if(r.id>=(unsigned)PDO_CELLS&&r.id<=(unsigned)PDO_TEMPS){pdo_recv(r.data,r.id);continue;}
         if(r.id!=(unsigned)rx)continue;
         if(r.data[0]==0x80)return -2;
         if(r.data[0]==0x43||r.data[0]==0x47||r.data[0]==0x4B||r.data[0]==0x4F||r.data[0]==0x41)
